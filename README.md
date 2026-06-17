@@ -74,7 +74,7 @@ cd greenproof
 # Python backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-PYTHONPATH=src python -m greenverify.api.main
+PYTHONPATH=py-src python -m greenverify.api.main
 
 # Dashboard (http://localhost:3001)
 cd dashboard && npm install && npm run dev
@@ -148,7 +148,7 @@ Set `DASHSCOPE_API_KEY` to enable AI verification.
 
 ```
 greenproof/
-├── src/greenverify/
+├── py-src/greenverify/
 │   ├── api/main.py              # FastAPI entry point
 │   ├── engines/verifier.py      # Verification orchestration
 │   ├── models/carbon.py         # Pydantic v2 models
@@ -161,7 +161,7 @@ greenproof/
 │   └── verifier-registry/lib.rs # Verifier management
 ├── dashboard/                   # Next.js 16 dashboard
 ├── landing/                     # Next.js 16 landing page
-└── tests/                       # pytest suite
+└── py-tests/                    # pytest suite
 ```
 
 ---

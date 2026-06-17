@@ -32,10 +32,11 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["py-src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["py-tests"]
+pythonpath = ["py-src"]
 asyncio_mode = "auto"
 
 [tool.ruff]
