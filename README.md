@@ -35,9 +35,9 @@ Project Documentation → AI Verification (Qwen LLM) → On-Chain Credential (PS
                                               Composable API (any protocol can query)
 ```
 
-1. **AI Verification** — Qwen LLM evaluates 7 criteria (additionality, permanence, measurability, leakage, methodology, documentation, compliance) and produces a structured 0–100 score with risk classification and actionable recommendations
-2. **On-Chain Credential** — Verified credits are minted as PSP34 NFTs with rich metadata: project details, verification history, vintage year, credit standard
-3. **Composable API** — Any marketplace, registry, or compliance tool can query verification scores via smart contract or REST API
+1. **AI Verification** — Qwen LLM evaluates 7 criteria (additionality, permanence, measurability, leakage, methodology, documentation, compliance) and produces a structured 0–100 score with risk classification and actionable recommendations — implemented by `py-src/greenverify/engines/verifier.py`
+2. **On-Chain Credential** — Verified credits are minted as PSP34 NFTs with rich metadata: project details, verification history, vintage year, credit standard — minted via `contracts/carbon-credit/lib.rs`, gated by the human-confirmed CHP mint gate in `py-src/greenverify/chp.py`
+3. **Composable API** — Any marketplace, registry, or compliance tool can query verification scores via smart contract (`get_credit_info` / `credits_by_project` in `contracts/carbon-credit/lib.rs`) or REST API (`py-src/greenverify/api/routes.py`)
 
 ---
 
@@ -46,7 +46,7 @@ Project Documentation → AI Verification (Qwen LLM) → On-Chain Credential (PS
 | Off-Chain Verification (status quo) | On-Chain Verification (GreenProof) |
 |---|---|
 | Score lives in a PDF on a registry website | Score is a PSP34 NFT with structured metadata |
-| Can't be queried programmatically | Any contract can call `get_verification_score()` |
+| Can't be queried programmatically | Any contract can call `get_credit_info()` / `credits_by_project()` (`contracts/carbon-credit/lib.rs`) |
 | Trust depends on the registry's reputation | Trust is anchored in blockchain immutability |
 | No composability — each marketplace re-verifies | Composable — one verification, many consumers |
 
