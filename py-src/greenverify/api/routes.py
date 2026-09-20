@@ -18,6 +18,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from ..chp import ChpMintGate, ChpRejection
 from ..models.carbon import (
     CarbonProject,
     CreditNFT,
@@ -54,6 +55,30 @@ class BuyListingRequest(BaseModel):
         listing_id: The listing ID to purchase.
     """
     listing_id: str = Field(min_length=1, description="Marketplace listing ID")
+
+
+class MintCreditRequest(BaseModel):
+    """Request body for minting a credit NFT from a hardened verification.
+
+    Attributes:
+        request_id: The verification request to mint against.
+        owner: Wallet address to receive the minted credit.
+        confirmed_by: Identity of the human confirmer approving the mint.
+            Mandatory while GREENVERIFY_CHP_REQUIRE_HUMAN_LOCK is set
+            (default ON) and for sub-floor foundation scores.
+        tx_hash: Optional contract-side minting transaction hash; when
+            omitted, a deterministic mock hash derived from the sealed CHP
+            ledger body is recorded (the on-chain mint itself is executed by
+            the ink! carbon-credit contract).
+    """
+    request_id: str = Field(min_length=1, description="Verification request ID")
+    owner: str = Field(min_length=1, description="Recipient wallet address")
+    confirmed_by: str | None = Field(
+        default=None, description="Named human confirmer, when approving"
+    )
+    tx_hash: str | None = Field(
+        default=None, description="Contract-side minting transaction hash, when available"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +125,16 @@ def create_app(
     # Initialise services
     data_service: GreenMarketDataService = market_data or GreenMarketDataService()
 
+    # One CHP mint gate per app: hardened decisions survive across requests so
+    # a verification submitted to one request can be minted by a later one.
+    chp_gate: ChpMintGate = ChpMintGate.from_env()
+
     # Lazily import the verification engine to avoid startup failures when
     # the API key is not set (health check should still work).
     def _get_verification_engine():
         """Lazily create the VerificationEngine on first use."""
         from ..engines.verifier import VerificationEngine
-        return VerificationEngine(market_data=data_service)
+        return VerificationEngine(market_data=data_service, chp_gate=chp_gate)
 
     # ------------------------------------------------------------------
     # Router setup
@@ -302,6 +331,96 @@ def create_app(
                 detail=f"Credit NFT with token_id '{token_id}' not found",
             )
         return credit
+
+    @router.post(
+        "/credits/mint",
+        tags=["Credits"],
+        summary="Mint a credit NFT from a hardened verification",
+        response_model=CreditNFT,
+    )
+    async def mint_credit(request: MintCreditRequest) -> CreditNFT:
+        """Mint the carbon credit NFT for a previously hardened verification.
+
+        The mint runs through the CHP human lock: while
+        GREENVERIFY_CHP_REQUIRE_HUMAN_LOCK is set (default ON) every mint
+        needs a named ``confirmed_by``, and a sub-floor foundation score
+        (below the blockchain floor of 85) cannot self-certify either. The
+        mint is recorded in the CHP decision ledger and the sealed record's
+        id and digest are anchored onto the returned CreditNFT.
+
+        Args:
+            request: The mint request (verification request_id, owner wallet,
+                     optional confirmer, optional contract tx hash).
+
+        Returns:
+            The minted CreditNFT with its CHP decision trail anchored.
+
+        Raises:
+            HTTPException: 400 if no hardened verification exists for the
+                           request_id; 422 if CHP refuses the mint.
+        """
+        try:
+            engine = _get_verification_engine()
+            credit = engine.mint_credit(
+                request_id=request.request_id,
+                owner=request.owner,
+                confirmed_by=request.confirmed_by,
+                tx_hash=request.tx_hash,
+            )
+            return credit
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ChpRejection as exc:
+            # CHP refused the mint (human lock, foundation floor).
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # ------------------------------------------------------------------
+    # CHP decision trail
+    # ------------------------------------------------------------------
+
+    @router.get(
+        "/decisions",
+        tags=["CHP Decisions"],
+        summary="List CHP mint decision records",
+        response_model=list[dict[str, Any]],
+    )
+    async def list_decisions() -> list[dict[str, Any]]:
+        """Return recent CHP decision records, newest first.
+
+        Every record is re-validated on read: ``envelope_valid`` checks the
+        CHP payload envelope structure and ``integrity_valid`` re-hashes the
+        sealed body against its recorded SHA-256 digest.
+
+        Returns:
+            A list of decision records with integrity flags.
+        """
+        return chp_gate.records.list()
+
+    @router.get(
+        "/decisions/{decision_id}",
+        tags=["CHP Decisions"],
+        summary="Get a specific CHP mint decision record",
+        response_model=dict[str, Any],
+    )
+    async def get_decision(decision_id: str) -> dict[str, Any]:
+        """Retrieve a single CHP decision record with integrity re-validated.
+
+        Args:
+            decision_id: The CHP decision identifier.
+
+        Returns:
+            The decision record with ``envelope_valid`` and ``integrity_valid``.
+
+        Raises:
+            HTTPException: 404 if the decision record is not found.
+        """
+        record = chp_gate.records.get(decision_id)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"CHP decision record '{decision_id}' not found",
+            )
+        return record
 
     # ------------------------------------------------------------------
     # Marketplace

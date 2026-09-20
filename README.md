@@ -184,19 +184,21 @@ MIT. See [`LICENSE`](./LICENSE).
 
 ## CHP Governance
 
-This repository is hardened with the [Consensus Hardening Protocol (CHP)](https://codeberg.org/cubiczan/consensus-hardening-protocol).
+This repository is hardened with the [Consensus Hardening Protocol (CHP)](https://codeberg.org/cubiczan/consensus-hardening-protocol). The Python verification service runs every verification-to-mint through a hardening gate (`py-src/greenverify/chp.py`). The ink! contract under `contracts/carbon-credit` is unchanged; the Python `CreditNFT` is the platform's record of a mint and now carries the decision trail (decision id, digest, transaction reference — with a deterministic mock transaction hash when no contract transaction is supplied).
 
-### Protocol Layers
-- **R0 Gate**: Solvable, Scoped, Valid, Worth_it
-- **Foundation Disclosure**: 1-3 weakest assumptions
-- **Adversarial Layer**: Devil's advocate at Phase 0 and Round 3
-- **State Machine**: EXPLORING → PROVISIONAL → PROVISIONAL_LOCK → LOCKED
-- **Third-Party Validation**: Independent CONFIRM/REJECT before lock
+### What is gated
+- **Every `POST /api/verify`** (`VerificationEngine.submit_verification`): the R0 gate runs before the LLM call. Requests that are unsolvable, out of scope, invalid, or not backed by measurement evidence in the submitted documentation are refused FATAL (capitalized result keys: `Solvable`, `Scoped`, `Valid`, `Worth_it`).
+- **After the LLM result parses**: a deterministic adversary scores the case — input guardrails 40 + bounded LLM result 30 + measurement parity 30. Parity compares the recommended credit amount against the form's declared measurement (`estimated_credits`) within a 20% MRV tolerance; a mismatch is FATAL and nothing is persisted.
+- **Every `POST /api/credits/mint`** (`VerificationEngine.mint_credit`): requires a hardened CHP decision, enforces the floor below, and records the mint in the decision ledger.
 
-### Domain Configuration
-- **Category**: Blockchain / DeFi
-- **Foundation Threshold**: 85
-- **CFO Accuracy Guard**: Disabled
+### Blockchain floor: 85
+Minted scores become on-chain carbon credits — issuance of a transferable financial-grade asset — so the gate uses CHP's blockchain domain floor of 85 (also pinned in `.chp/R0_CONFIG.yaml` as `pass_threshold`). Only parity-backed verifications (score 100 = 40 + 30 + 30) can self-certify at that floor. When no declared measurement is available for parity (score 70), minting can never self-certify; it requires a named human confirmer.
+
+### Human lock
+Verification cases start `EXPLORING` and open `PROVISIONAL_LOCK`. With `GREENVERIFY_CHP_REQUIRE_HUMAN_LOCK` (default ON), nothing mints without a named confirmer (`confirmed_by` on the mint request, or `GREENVERIFY_CHP_CONFIRMED_BY`) locking the case through CHP third-party validation to `LOCKED`.
+
+### Decision ledger
+Each mint seals a CHP payload envelope into an append-only JSONL ledger (`GREENVERIFY_CHP_DECISIONS_PATH`) with a SHA-256 `body_sha256` over the payload body — CHP's envelope validation is structure-only, so content integrity is our own digest — and every read is revalidated (`integrity_valid`). The minted `CreditNFT` anchors `chp_decision_id` and `chp_body_sha256`. Inspect the trail via `GET /api/decisions` and `GET /api/decisions/{decision_id}`.
 
 ### CHP Version
-cognitive-mesh-orchestrator 0.1.0 | [Protocol Docs](https://codeberg.org/cubiczan/consensus-hardening-protocol)
+`consensus-hardening-protocol==0.1.1` (PyPI) | [Protocol Docs](https://codeberg.org/cubiczan/consensus-hardening-protocol)

@@ -188,6 +188,29 @@ class GreenMarketDataService:
         self._verifications[result.request_id] = result
         return result
 
+    def get_verification(self, request_id: str) -> VerificationResult | None:
+        """Retrieve a single verification result by its request identifier.
+
+        Args:
+            request_id: The verification request identifier.
+
+        Returns:
+            The matching VerificationResult, or None if not found.
+        """
+        return self._verifications.get(request_id)
+
+    def add_credit(self, credit: CreditNFT) -> CreditNFT:
+        """Register a minted credit NFT.
+
+        Args:
+            credit: The CreditNFT to add.
+
+        Returns:
+            The added CreditNFT.
+        """
+        self._credits[credit.token_id] = credit
+        return credit
+
     def get_dashboard_overview(self) -> DashboardOverview:
         """Compute aggregated dashboard statistics.
 

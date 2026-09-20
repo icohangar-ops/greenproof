@@ -21,6 +21,7 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0",
     "web3>=6.0",
+    "consensus-hardening-protocol==0.1.1",
 ]
 
 [project.optional-dependencies]

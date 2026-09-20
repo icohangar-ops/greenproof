@@ -134,6 +134,16 @@ class VerificationResult(BaseModel):
     verified_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    chp_decision_id: str | None = Field(
+        default=None,
+        description="CHP decision case anchoring this verification (None = unhardened)",
+    )
+    chp_session_status: str | None = Field(
+        default=None, description="CHP session status at verification time"
+    )
+    chp_foundation_score: int | None = Field(
+        default=None, description="Deterministic adversary foundation score (0-100)"
+    )
 
 
 class CreditNFT(BaseModel):
@@ -164,6 +174,17 @@ class CreditNFT(BaseModel):
     country: str
     minted_at: str
     onchain_tx_hash: str
+    chp_decision_id: str | None = Field(
+        default=None,
+        description=(
+            "CHP decision case whose ledger record anchors what was minted"
+            " (None for seeded/demo credits)"
+        ),
+    )
+    chp_body_sha256: str | None = Field(
+        default=None,
+        description="SHA-256 digest of the sealed CHP ledger body for this mint",
+    )
 
 
 class MarketplaceListing(BaseModel):

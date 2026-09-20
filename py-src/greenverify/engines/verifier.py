@@ -10,9 +10,14 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
+from chp import Verdict
+
+from ..chp import ChpMintGate, ChpRejection
 from ..models.carbon import (
     CarbonProject,
+    CreditNFT,
     ProjectStatus,
     RiskLevel,
     VerificationFormData,
@@ -40,6 +45,7 @@ class VerificationEngine:
         self,
         qwen_client: QwenClient | None = None,
         market_data: GreenMarketDataService | None = None,
+        chp_gate: ChpMintGate | None = None,
     ) -> None:
         """Initialise the verification engine.
 
@@ -49,9 +55,12 @@ class VerificationEngine:
                          variables.
             market_data: An optional pre-configured GreenMarketDataService. If
                          not provided, a new default instance will be created.
+            chp_gate: An optional pre-configured CHP mint gate. If not provided,
+                      one is built from environment configuration.
         """
         self._qwen_client: QwenClient = qwen_client or QwenClient()
         self._market_data: GreenMarketDataService = market_data or GreenMarketDataService()
+        self._chp_gate: ChpMintGate = chp_gate or ChpMintGate.from_env()
         logger.info("VerificationEngine initialised")
 
     async def submit_verification(
@@ -61,11 +70,15 @@ class VerificationEngine:
         """Submit a new carbon project for AI-powered verification.
 
         Executes the full verification pipeline:
+        0. Runs the CHP R0 gate — HALT before the engine sees the request.
         1. Creates a CarbonProject from the form data.
         2. Calls the Qwen LLM to analyse the project documentation.
         3. Parses and validates the LLM's structured response.
-        4. Persists the project and verification result.
-        5. Returns the final VerificationResult.
+        4. Runs the CHP foundation pass (deterministic adversary scoring with
+           measurement parity; a parity mismatch is fatal) and opens a
+           PROVISIONAL_LOCK decision case for the eventual mint.
+        5. Persists the project and verification result.
+        6. Returns the final VerificationResult.
 
         Args:
             form_data: The submitted verification form containing project
@@ -73,11 +86,14 @@ class VerificationEngine:
 
         Returns:
             A VerificationResult with the AI's assessment, score, risk
-            classification, and recommendations.
+            classification, recommendations, and the CHP decision trail
+            summary.
 
         Raises:
             RuntimeError: If the LLM analysis or result parsing fails.
             ValueError: If the form data is invalid.
+            ChpRejection: If CHP refuses the request (R0 HALT or a
+                          measurement-parity mismatch).
         """
         request_id = uuid.uuid4().hex
         logger.info(
@@ -86,6 +102,9 @@ class VerificationEngine:
             form_data.name,
             form_data.project_type,
         )
+
+        # Step 0: CHP R0 gate — refuse ill-posed requests before the engine.
+        self._chp_gate.open_r0(form_data)
 
         # Step 1: Create the CarbonProject
         project = CarbonProject(
@@ -115,6 +134,17 @@ class VerificationEngine:
             llm_result=llm_result,
         )
 
+        # Step 3.5: CHP foundation pass — deterministic adversary scoring with
+        # measurement parity. A parity mismatch is fatal: nothing is persisted.
+        decision = self._chp_gate.harden(
+            request_id=request_id,
+            form_data=form_data,
+            llm_result=llm_result,
+        )
+        verification_result.chp_decision_id = decision.case.decision_id
+        verification_result.chp_session_status = decision.case.status.value
+        verification_result.chp_foundation_score = decision.case.foundation_score
+
         # Step 4: Update project status based on verification outcome
         if verification_result.pass_fail:
             project.status = ProjectStatus.VERIFIED
@@ -135,6 +165,117 @@ class VerificationEngine:
         )
 
         return verification_result
+
+    def mint_credit(
+        self,
+        request_id: str,
+        owner: str,
+        confirmed_by: str | None = None,
+        tx_hash: str | None = None,
+    ) -> CreditNFT:
+        """Mint the credit NFT for a hardened verification (the verify→mint exit).
+
+        Runs the mint through the CHP human lock:
+        - ``GREENVERIFY_CHP_REQUIRE_HUMAN_LOCK`` (default ON) — every mint
+          needs a named ``confirmed_by``;
+        - a sub-floor foundation verdict (below the blockchain floor of 85)
+          cannot self-certify — it also needs a named ``confirmed_by``;
+        - a confirmed decision is locked via CHP third-party validation
+          (PROVISIONAL_LOCK -> LOCKED).
+
+        The mint is then recorded in the decision ledger and the sealed
+        record's id and body digest are anchored onto the CreditNFT.
+
+        Args:
+            request_id: The verification request to mint against.
+            owner: Wallet address to receive the minted credit.
+            confirmed_by: Identity of the human confirmer, when approving.
+            tx_hash: Contract-side minting transaction hash. The on-chain
+                mint itself is executed by the ink! carbon-credit contract;
+                when no contract transaction is supplied (the current
+                integration state), a deterministic mock hash derived from
+                the sealed ledger body is recorded instead.
+
+        Returns:
+            The minted CreditNFT, anchored to its CHP decision record.
+
+        Raises:
+            ValueError: If no hardened verification exists for request_id.
+            ChpRejection: If CHP refuses the mint (human lock or floor).
+        """
+        decision_id = f"mint-{request_id}"
+        decision = self._chp_gate.pending(decision_id)
+        if decision is None:
+            raise ValueError(
+                f"No hardened CHP decision exists for verification '{request_id}' —"
+                " submit the project for verification first"
+            )
+
+        verification = self._market_data.get_verification(request_id)
+        if verification is None:
+            raise ValueError(f"Verification '{request_id}' not found")
+
+        if self._chp_gate.require_human_lock and not confirmed_by:
+            raise ChpRejection(
+                "CHP human lock: GREENVERIFY_CHP_REQUIRE_HUMAN_LOCK is set —"
+                " every mint needs a named confirmer (confirmed_by)."
+            )
+        if decision.report.foundation_verdict != Verdict.PASS and not confirmed_by:
+            raise ChpRejection(
+                f"CHP foundation: {decision.report.foundation_verdict.value}"
+                f" (score {decision.case.foundation_score},"
+                f" {decision.assessment.domain} domain, blockchain floor 85) —"
+                " the mint cannot self-certify; retry with a named confirmer"
+                " (confirmed_by)."
+            )
+        if confirmed_by:
+            self._chp_gate.lock(decision, confirmed_by)
+
+        project = self._market_data.get_project(verification.project_id)
+        if project is None:
+            raise ValueError(f"Project '{verification.project_id}' not found")
+
+        mint_metadata: dict[str, Any] = {
+            "token_id": f"nft_{uuid.uuid4().hex[:8]}",
+            "owner": owner,
+            "amount": verification.credit_amount_recommended,
+            "score": verification.score,
+            "credit_standard": project.credit_standard,
+            "vintage_year": project.vintage_year,
+        }
+        record = self._chp_gate.record(
+            decision,
+            request_id=request_id,
+            project_id=project.project_id,
+            mint_metadata=mint_metadata,
+            confirmed_by=confirmed_by,
+        )
+
+        credit = CreditNFT(
+            token_id=mint_metadata["token_id"],
+            project_id=project.project_id,
+            owner=owner,
+            amount=verification.credit_amount_recommended,
+            vintage_year=project.vintage_year,
+            credit_standard=project.credit_standard,
+            project_name=project.name,
+            project_type=project.project_type,
+            country=project.country,
+            minted_at=datetime.now(timezone.utc).isoformat(),
+            onchain_tx_hash=tx_hash or f"0x{record['body_sha256'][:40]}",
+            chp_decision_id=record["decision_id"],
+            chp_body_sha256=record["body_sha256"],
+        )
+        self._market_data.add_credit(credit)
+
+        logger.info(
+            "Credit minted — token_id=%s, decision_id=%s, session_status=%s, confirmed_by=%s",
+            credit.token_id,
+            record["decision_id"],
+            record["session_status"],
+            confirmed_by,
+        )
+        return credit
 
     @staticmethod
     def _build_verification_result(
