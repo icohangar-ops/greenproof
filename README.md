@@ -202,3 +202,19 @@ Each mint seals a CHP payload envelope into an append-only JSONL ledger (`GREENV
 
 ### CHP Version
 `consensus-hardening-protocol==0.1.1` (PyPI) | [Protocol Docs](https://codeberg.org/cubiczan/consensus-hardening-protocol)
+
+## Propagation notes (wave B)
+
+- **Row 8 (attestation-threshold minting) — reversed; superseded by the CHP
+  mint gate.** The row's 3-of-N verifier-attestation form would require
+  modifying the ink! contract's owner-only mint
+  (`contracts/carbon-credit/lib.rs` — single owner may mint), and the
+  verifier registry (`contracts/verifier-registry/lib.rs`) is a registration
+  index, not an attestation collector — no verifier ever signs a credit
+  issuance. Minting is instead gated by the merged CHP decision trail
+  (`py-src/greenverify/chp.py` `ChpMintGate`, hardened decision at the 85
+  blockchain floor plus mandatory human lock), which is a stronger
+  human-locked gate than attestation counting. Reopens if the verifier
+  registry grows a real attestation flow (verifiers actively signing
+  issuances) — at that point wire it into the mint path alongside the CHP
+  gate.
