@@ -46,7 +46,7 @@ Project Documentation → AI Verification (Qwen LLM) → On-Chain Credential (PS
 | Off-Chain Verification (status quo) | On-Chain Verification (GreenProof) |
 |---|---|
 | Score lives in a PDF on a registry website | Score is a PSP34 NFT with structured metadata |
-| Can't be queried programmatically | Any contract can call `get_verification_score()` |
+| Can't be queried programmatically | Any contract can call `get_credit_info()` / `credits_by_project()` (`contracts/carbon-credit/lib.rs`) |
 | Trust depends on the registry's reputation | Trust is anchored in blockchain immutability |
 | No composability — each marketplace re-verifies | Composable — one verification, many consumers |
 
@@ -83,7 +83,16 @@ cd dashboard && npm install && npm run dev
 cd landing && npm install && npm run dev
 ```
 
-Set `DASHSCOP* on
+Set `DASHSCOPE_API_KEY` to enable AI verification.
+
+---
+
+## Smart Contracts
+
+### `carbon-credit` — PSP34 NFT
+
+> **Build note:** `carbon-credit` implements the PSP34 NFT standard (ownership,
+> approvals, total supply and the Enumerable extension) **natively** on
 > `ink::storage::Mapping`, with no external framework. It builds on **stable
 > Rust with ink! 5**, alongside `marketplace` and `verifier-registry`, and is a
 > first-class member of the workspace. (It was previously built on OpenBrush
@@ -190,10 +199,6 @@ Verification cases start `EXPLORING` and open `PROVISIONAL_LOCK`. With `GREENVER
 
 ### Decision ledger
 Each mint seals a CHP payload envelope into an append-only JSONL ledger (`GREENVERIFY_CHP_DECISIONS_PATH`) with a SHA-256 `body_sha256` over the payload body — CHP's envelope validation is structure-only, so content integrity is our own digest — and every read is revalidated (`integrity_valid`). The minted `CreditNFT` anchors `chp_decision_id` and `chp_body_sha256`. Inspect the trail via `GET /api/decisions` and `GET /api/decisions/{decision_id}`.
-
-### CHP Version
-`consensus-hardening-protocol==0.1.1` (PyPI) | [Protocol Docs](https://codeberg.org/cubiczan/consensus-hardening-protocol)
-and `chp_body_sha256`. Inspect the trail via `GET /api/decisions` and `GET /api/decisions/{decision_id}`.
 
 ### CHP Version
 `consensus-hardening-protocol==0.1.1` (PyPI) | [Protocol Docs](https://codeberg.org/cubiczan/consensus-hardening-protocol)
